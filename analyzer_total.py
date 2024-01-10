@@ -1,12 +1,16 @@
 import os
 import math
+import time
 import numpy as np
-from collections import Counter, defaultdict
+from collections import Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import seaborn as sns
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
 
 # Preprocess text (tokenization, lowercasing, stemming)
 def preprocess(text):
@@ -48,11 +52,29 @@ def bm25(doc, query, idf, k1=1.5, b=0.75, avg_doc_length=0):
             score += idf[term] * term_freq * (k1 + 1) / (term_freq + k1 * (1 - b + b * doc_length / avg_doc_length))
     return score
 
+
+scaler = MinMaxScaler(feature_range=(0.001, 0.999))
+
+# Store timings
+timings_vsm = []
+timings_bm25 = []
+
 # Main execution
 directory = 'C:/users/petro/tuc_db'
 raw_documents, preprocessed_documents = load_and_preprocess_documents(directory)
 avg_doc_length = sum(len(d) for d in preprocessed_documents.values()) / len(preprocessed_documents)
 idf = calculate_idf(preprocessed_documents)
+
+
+doc_lengths = [len(doc.split()) for doc in raw_documents.values()]
+
+# Plotting doc len distribution
+plt.figure()
+plt.hist(doc_lengths, bins=30, log=True)
+plt.title('Document Length Distribution Logarithmic')
+plt.xlabel('Document Length')
+plt.ylabel('Frequency')
+plt.savefig('doc_len_dist.png')
 
 # Create TF-IDF model
 tfidf_vectorizer = TfidfVectorizer()
@@ -65,14 +87,25 @@ top_n = 3
 for query in queries:
     print(f'\nQuery: "{query}"')
 
-    # Process for VSM
+    # VSM timing
+    start_time = time.time()
     cosine_similarities = cosine_similarity(tfidf_vectorizer.transform([query]), tfidf_matrix).flatten()
     ranked_docs_vsm = sorted(((score, doc) for doc, score in zip(raw_documents, cosine_similarities)), reverse=True)
+    end_time = time.time()
+    timings_vsm.append(end_time - start_time)
 
-    # Process for BM25
+    # BM25 timing
+    start_time = time.time()
     preprocessed_query = preprocess(query)
     scores_bm25 = {doc: bm25(content, preprocessed_query, idf, avg_doc_length=avg_doc_length) for doc, content in preprocessed_documents.items()}
+    # Normalize BM25 scores
+    scores_list = np.array(list(scores_bm25.values())).reshape(-1, 1)
+    normalized_scores = scaler.fit_transform(scores_list).flatten()
+    scores_bm25 = dict(zip(scores_bm25.keys(), normalized_scores))
     sorted_scores_bm25 = sorted(scores_bm25.items(), key=lambda x: x[1], reverse=True)
+    end_time = time.time()
+    timings_bm25.append(end_time - start_time)
+
 
     # Display top N results for VSM
     print(f'\nTop-{top_n} Results | VSM')
@@ -83,3 +116,16 @@ for query in queries:
     print(f'\nTop-{top_n} Results | Okapi BM25')
     for doc, score in sorted_scores_bm25[:top_n]:
         print(f"Document: http://{doc.replace('_','/').replace('.txt','')}    |   Score: {score:.4f}")
+
+
+# Plotting the results
+plt.figure()
+plt.plot(queries, timings_vsm, label='VSM', marker='o')
+plt.plot(queries, timings_bm25, label='Okapi-BM25', marker='x')
+plt.xlabel('Queries')
+plt.ylabel('Time (seconds)')
+plt.title('Query Processing Time')
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig('analysis_time.png')
